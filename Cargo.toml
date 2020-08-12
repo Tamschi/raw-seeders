@@ -7,3 +7,4 @@ publish = false
 
 [dependencies]
 serde = "1.0.115"
+serde-seeded = { path = "../serde-seeded" }
