@@ -29,7 +29,7 @@ pub fn literal<'a>(literal: &'a [u8]) -> impl 'a + Seeder<()> {
     }
     impl<'a, 'de> de::DeserializeSeed<'de> for Literal<'a> {
         type Value = ();
-        fn deserialize<D>(mut self, deserializer: D) -> Result<Self::Value, D::Error>
+        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
         where
             D: serde::Deserializer<'de>,
         {
