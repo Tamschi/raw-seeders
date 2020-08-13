@@ -35,9 +35,8 @@ pub fn literal<'a>(literal: &'a [u8]) -> impl 'a + Seeder<()> {
         {
             let len = self.0.len();
 
-            struct Visitor<'a, 'b>(&'a mut &'b [u8]);
-            deserializer.deserialize_tuple(len, Visitor(&mut self.0))?;
-            impl<'a, 'b, 'de> de::Visitor<'de> for Visitor<'a, 'b> {
+            struct Visitor<'a>(&'a [u8]);
+            impl<'a, 'de> de::Visitor<'de> for Visitor<'a> {
                 type Value = ();
                 fn expecting(
                     &self,
@@ -46,29 +45,26 @@ pub fn literal<'a>(literal: &'a [u8]) -> impl 'a + Seeder<()> {
                     write!(f, "{} literal bytes", self.0.len())
                 }
 
-                fn visit_u8<E>(self, v: u8) -> Result<Self::Value, E>
-                where
-                    E: de::Error,
-                {
-                    match self.0.first().copied() {
-                        Some(e) if v == e => Ok(()),
-                        Some(_) => Err(de::Error::invalid_value(
-                            de::Unexpected::Bytes(&[v]),
-                            &format!("{:?}", self.0).as_str(),
-                        )),
-                        None => Err(de::Error::invalid_length(1, &"no more bytes")),
+                fn visit_seq<A: de::SeqAccess<'de>>(
+                    self,
+                    mut seq: A,
+                ) -> Result<Self::Value, A::Error> {
+                    for (i, expected) in self.0.iter().copied().enumerate() {
+                        let received: u8 = seq
+                            .next_element()?
+                            .ok_or_else(|| de::Error::invalid_length(i, &self))?;
+                        if expected != received {
+                            return Err(de::Error::invalid_value(
+                                de::Unexpected::Unsigned(received as u64),
+                                &format!("{} in {:?}", expected, self.0).as_str(),
+                            ));
+                        }
                     }
+                    Ok(())
                 }
             }
 
-            if self.0.is_empty() {
-                Ok(())
-            } else {
-                Err(de::Error::invalid_length(
-                    len - self.0.len(),
-                    &format!("{} literal bytes", len).as_str(),
-                ))
-            }
+            deserializer.deserialize_tuple(len, Visitor(self.0))
         }
     }
 
