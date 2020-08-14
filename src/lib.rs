@@ -117,3 +117,12 @@ impl ByteOrdered for u32 {
         serializer.serialize_bytes(&self.to_le_bytes())
     }
 }
+
+impl ByteOrdered for f32 {
+    fn deserialize_le<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from_le_bytes(PhantomData.deserialize(deserializer)?))
+    }
+    fn serialize_le<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&self.to_le_bytes())
+    }
+}
