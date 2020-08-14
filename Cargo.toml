@@ -8,3 +8,4 @@ publish = false
 [dependencies]
 serde = "1.0.115"
 serde-seeded = { path = "../serde-seeded" }
+wyz = "0.2.0"
