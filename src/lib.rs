@@ -1,22 +1,26 @@
+use serde_seeded::{DeSeeder, SerSeeder};
 use {
     arrayvec::{Array, ArrayVec},
     serde::{
         de::{self, DeserializeSeed as _},
         ser::{self, SerializeTuple as _},
     },
-    serde_seeded::Seeder,
     std::{iter, marker::PhantomData},
     wyz::Pipe as _,
 };
 
+/// Stores a binary slice instead of a `()`.  
+/// (Parameters: A `&[u8]` specifying the data to store or check against.)
 #[derive(Debug, Clone, Copy, PartialEq, Ord, PartialOrd, Eq)]
 pub struct Literal<'a>(pub &'a [u8]);
-impl<'s> Seeder<'s, ()> for Literal<'s> {
+impl<'a> DeSeeder<()> for Literal<'a> {
     type Seed = Self;
-    type Seeded = Self;
     fn seed(self) -> Self::Seed {
         self
     }
+}
+impl<'s> SerSeeder<'s, ()> for Literal<'s> {
+    type Seeded = Self;
     fn seeded(&'s self, _: &()) -> Self::Seeded {
         *self
     }
@@ -67,14 +71,17 @@ impl<'a, 'de> de::DeserializeSeed<'de> for Literal<'a> {
     }
 }
 
+/// Little-endian (least significant byte first) storage for integers.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct LittleEndian;
-impl<'s, T: 's + ByteOrdered> Seeder<'s, T> for LittleEndian {
+impl<T: ByteOrdered> DeSeeder<T> for LittleEndian {
     type Seed = LittleEndianSeed<T>;
-    type Seeded = LittleEndianSeeded<'s, T>;
     fn seed(self) -> Self::Seed {
         LittleEndianSeed(PhantomData)
     }
+}
+impl<'s, T: 's + ByteOrdered> SerSeeder<'s, T> for LittleEndian {
+    type Seeded = LittleEndianSeeded<'s, T>;
     fn seeded(&'s self, value: &'s T) -> Self::Seeded {
         LittleEndianSeeded(value)
     }
@@ -92,6 +99,7 @@ impl<'de, T: ByteOrdered> de::DeserializeSeed<'de> for LittleEndianSeed<T> {
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct LittleEndianSeeded<'a, T>(&'a T);
 impl<'a, T: ByteOrdered> ser::Serialize for LittleEndianSeeded<'a, T> {
@@ -103,6 +111,7 @@ impl<'a, T: ByteOrdered> ser::Serialize for LittleEndianSeeded<'a, T> {
     }
 }
 
+/// See [`BigEndian`] and [`LittleEndian`].
 pub trait ByteOrdered: Sized {
     fn deserialize_le<'de, D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error>;
     fn serialize_le<S: ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>;
@@ -117,24 +126,29 @@ impl ByteOrdered for u32 {
     }
 }
 
+/// IEEE 754-storage for floating point numbers.  
+/// (Parameters: unsigned integer [`Seeder`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IEEE754<ReprSeeder>(pub ReprSeeder);
-impl<'s, T: 's + IEEE754able, ReprSeeder: for<'repr> Seeder<'repr, T::Repr> + 's> Seeder<'s, T>
-    for IEEE754<ReprSeeder>
-{
+impl<T: IEEE754able, ReprSeeder: DeSeeder<T::Repr>> DeSeeder<T> for IEEE754<ReprSeeder> {
     type Seed = IEEE754Seed<T, ReprSeeder>;
-    type Seeded = IEEE754Seeded<'s, T, ReprSeeder>;
     fn seed(self) -> Self::Seed {
         IEEE754Seed(self.0, PhantomData)
     }
+}
+impl<'s, T: 's + IEEE754able, ReprSeeder: for<'repr> SerSeeder<'repr, T::Repr> + 's>
+    SerSeeder<'s, T> for IEEE754<ReprSeeder>
+{
+    type Seeded = IEEE754Seeded<'s, T, ReprSeeder>;
     fn seeded(&'s self, value: &'s T) -> Self::Seeded {
         IEEE754Seeded(value, &self.0)
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IEEE754Seed<T, ReprSeeder>(ReprSeeder, PhantomData<T>);
-impl<'de, T: IEEE754able, ReprSeeder: for<'d> Seeder<'d, T::Repr>> de::DeserializeSeed<'de>
+impl<'de, T: IEEE754able, ReprSeeder: for<'d> DeSeeder<T::Repr>> de::DeserializeSeed<'de>
     for IEEE754Seed<T, ReprSeeder>
 {
     type Value = T;
@@ -146,10 +160,11 @@ impl<'de, T: IEEE754able, ReprSeeder: for<'d> Seeder<'d, T::Repr>> de::Deseriali
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct IEEE754Seeded<'a, T, ReprSeeder>(&'a T, &'a ReprSeeder);
-impl<'a, T: IEEE754able, ReprSeeder: for<'b> Seeder<'b, T::Repr>> ser::Serialize
-    for IEEE754Seeded<'a, T, ReprSeeder>
+impl<'s, T: IEEE754able, ReprSeeder: for<'repr> SerSeeder<'repr, T::Repr>> ser::Serialize
+    for IEEE754Seeded<'s, T, ReprSeeder>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -161,6 +176,7 @@ impl<'a, T: IEEE754able, ReprSeeder: for<'b> Seeder<'b, T::Repr>> ser::Serialize
     }
 }
 
+/// See [`IEEE754`].
 pub trait IEEE754able {
     type Repr;
     fn from(repr: Self::Repr) -> Self;
@@ -187,16 +203,20 @@ impl IEEE754able for f64 {
     }
 }
 
+/// Fixed length containers as tuple.  
+/// (Parameters: item [`Seeder`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Tuple<ItemSeeder>(pub ItemSeeder);
-impl<'s, T: 's + Tupleable, ItemSeeder: Clone + for<'item> Seeder<'item, T::Item> + 's>
-    Seeder<'s, T> for Tuple<ItemSeeder>
-{
+impl<T: Tupleable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T> for Tuple<ItemSeeder> {
     type Seed = TupleSeed<T, ItemSeeder>;
-    type Seeded = TupleSeeded<'s, T, ItemSeeder>;
     fn seed(self) -> Self::Seed {
         TupleSeed(self.0, PhantomData)
     }
+}
+impl<'s, T: 's + Tupleable, ItemSeeder: Clone + for<'item> SerSeeder<'item, T::Item> + 's>
+    SerSeeder<'s, T> for Tuple<ItemSeeder>
+{
+    type Seeded = TupleSeeded<'s, T, ItemSeeder>;
     fn seeded(&'s self, value: &'s T) -> Self::Seeded {
         TupleSeeded(value, &self.0)
     }
@@ -204,7 +224,7 @@ impl<'s, T: 's + Tupleable, ItemSeeder: Clone + for<'item> Seeder<'item, T::Item
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct TupleSeed<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
-impl<'de, T: Tupleable, ItemSeeder: Clone + for<'d> Seeder<'d, T::Item>> de::DeserializeSeed<'de>
+impl<'de, T: Tupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::DeserializeSeed<'de>
     for TupleSeed<T, ItemSeeder>
 {
     type Value = T;
@@ -213,7 +233,7 @@ impl<'de, T: Tupleable, ItemSeeder: Clone + for<'d> Seeder<'d, T::Item>> de::Des
         D: serde::Deserializer<'de>,
     {
         struct Visitor<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
-        impl<'de, T: Tupleable, ItemSeeder: Clone + for<'d> Seeder<'d, T::Item>> de::Visitor<'de>
+        impl<'de, T: Tupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Visitor<'de>
             for Visitor<T, ItemSeeder>
         {
             type Value = T;
@@ -244,9 +264,10 @@ impl<'de, T: Tupleable, ItemSeeder: Clone + for<'d> Seeder<'d, T::Item>> de::Des
     }
 }
 
+#[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct TupleSeeded<'a, T, ItemSeeder>(&'a T, &'a ItemSeeder);
-impl<'a, T: Tupleable, ItemSeeder: for<'b> Seeder<'b, T::Item>> ser::Serialize
+impl<'a, T: Tupleable, ItemSeeder: for<'b> SerSeeder<'b, T::Item>> ser::Serialize
     for TupleSeeded<'a, T, ItemSeeder>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -259,11 +280,12 @@ impl<'a, T: Tupleable, ItemSeeder: for<'b> Seeder<'b, T::Item>> ser::Serialize
     }
 }
 
+/// See [`Tuple`].
 pub trait Tupleable: Sized {
     type Item;
     const LEN: usize;
     fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E>;
-    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: for<'s> Seeder<'s, Self::Item>>(
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: for<'s> SerSeeder<'s, Self::Item>>(
         &self,
         serialize_tuple: &mut SerializeTuple,
         item_seeder: &ItemSeeder,
@@ -284,7 +306,7 @@ impl<T: Array> Tupleable for T {
         let array = vec.into_inner().map_err(|_| unreachable!())?;
         Ok(array)
     }
-    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: for<'s> Seeder<'s, Self::Item>>(
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: for<'s> SerSeeder<'s, Self::Item>>(
         &self,
         serialize_tuple: &mut SerializeTuple,
         item_seeder: &ItemSeeder,
