@@ -10,14 +10,14 @@ use {
 
 #[derive(Debug, Clone, Copy, PartialEq, Ord, PartialOrd, Eq)]
 pub struct Literal<'a>(pub &'a [u8]);
-impl<'a: 's, 's> Seeder<'s, ()> for Literal<'a> {
+impl<'s> Seeder<'s, ()> for Literal<'s> {
     type Seed = Self;
     type Seeded = Self;
     fn seed(self) -> Self::Seed {
         self
     }
-    fn seeded(self, _: &()) -> Self::Seeded {
-        self
+    fn seeded(&'s self, _: &()) -> Self::Seeded {
+        *self
     }
 }
 impl<'a> ser::Serialize for Literal<'a> {
@@ -74,7 +74,7 @@ impl<'s, T: 's + ByteOrdered> Seeder<'s, T> for LittleEndian {
     fn seed(self) -> Self::Seed {
         LittleEndianSeed(PhantomData)
     }
-    fn seeded(self, value: &'s T) -> Self::Seeded {
+    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
         LittleEndianSeeded(value)
     }
 }
@@ -118,16 +118,16 @@ impl ByteOrdered for u32 {
 
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IEEE754<ReprSeeder>(pub ReprSeeder);
-impl<'s, T: 's + IEEE754able, ReprSeeder: Clone + for<'repr> Seeder<'repr, T::Repr> + 's>
-    Seeder<'s, T> for IEEE754<ReprSeeder>
+impl<'s, T: 's + IEEE754able, ReprSeeder: for<'repr> Seeder<'repr, T::Repr> + 's> Seeder<'s, T>
+    for IEEE754<ReprSeeder>
 {
     type Seed = IEEE754Seed<T, ReprSeeder>;
     type Seeded = IEEE754Seeded<'s, T, ReprSeeder>;
     fn seed(self) -> Self::Seed {
         IEEE754Seed(self.0, PhantomData)
     }
-    fn seeded(self, value: &'s T) -> Self::Seeded {
-        IEEE754Seeded(value, self.0)
+    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+        IEEE754Seeded(value, &self.0)
     }
 }
 
@@ -146,8 +146,8 @@ impl<'de, T: IEEE754able, ReprSeeder: for<'d> Seeder<'d, T::Repr>> de::Deseriali
 }
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct IEEE754Seeded<'a, T, ReprSeeder>(&'a T, ReprSeeder);
-impl<'a, T: IEEE754able, ReprSeeder: Clone + for<'b> Seeder<'b, T::Repr>> ser::Serialize
+pub struct IEEE754Seeded<'a, T, ReprSeeder>(&'a T, &'a ReprSeeder);
+impl<'a, T: IEEE754able, ReprSeeder: for<'b> Seeder<'b, T::Repr>> ser::Serialize
     for IEEE754Seeded<'a, T, ReprSeeder>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -156,7 +156,7 @@ impl<'a, T: IEEE754able, ReprSeeder: Clone + for<'b> Seeder<'b, T::Repr>> ser::S
     {
         self.0
             .to()
-            .pipe(|repr| self.1.clone().seeded(&repr).serialize(serializer))
+            .pipe(|repr| self.1.seeded(&repr).serialize(serializer))
     }
 }
 
