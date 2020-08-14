@@ -7,68 +7,61 @@ use {
     serde_seeded::Seeder,
 };
 
-pub fn literal<'a>(literal: &'a [u8]) -> impl 'a + Seeder<()> {
-    struct Literal<'a>(&'a [u8]);
-    impl<'a: 's, 's> Seeder<'s, ()> for Literal<'a> {
-        type Seed = Self;
-        type Seeded = Self;
-        fn seed(self) -> Self::Seed {
-            self
-        }
-        fn seeded(self, _: &()) -> Self::Seeded {
-            self
-        }
+pub struct Literal<'a>(pub &'a [u8]);
+impl<'a: 's, 's> Seeder<'s, ()> for Literal<'a> {
+    type Seed = Self;
+    type Seeded = Self;
+    fn seed(self) -> Self::Seed {
+        self
     }
-    impl<'a> ser::Serialize for Literal<'a> {
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
-        {
-            self.0.serialize(serializer)
-        }
+    fn seeded(self, _: &()) -> Self::Seeded {
+        self
     }
-    impl<'a, 'de> de::DeserializeSeed<'de> for Literal<'a> {
-        type Value = ();
-        fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
-        where
-            D: serde::Deserializer<'de>,
-        {
-            let len = self.0.len();
+}
+impl<'a> ser::Serialize for Literal<'a> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+impl<'a, 'de> de::DeserializeSeed<'de> for Literal<'a> {
+    type Value = ();
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let len = self.0.len();
 
-            struct Visitor<'a>(&'a [u8]);
-            impl<'a, 'de> de::Visitor<'de> for Visitor<'a> {
-                type Value = ();
-                fn expecting(
-                    &self,
-                    f: &mut std::fmt::Formatter<'_>,
-                ) -> std::result::Result<(), std::fmt::Error> {
-                    write!(f, "{} literal bytes", self.0.len())
-                }
-
-                fn visit_seq<A: de::SeqAccess<'de>>(
-                    self,
-                    mut seq: A,
-                ) -> Result<Self::Value, A::Error> {
-                    for (i, expected) in self.0.iter().copied().enumerate() {
-                        let received: u8 = seq
-                            .next_element()?
-                            .ok_or_else(|| de::Error::invalid_length(i, &self))?;
-                        if expected != received {
-                            return Err(de::Error::invalid_value(
-                                de::Unexpected::Unsigned(received as u64),
-                                &format!("{} in {:?}", expected, self.0).as_str(),
-                            ));
-                        }
-                    }
-                    Ok(())
-                }
+        struct Visitor<'a>(&'a [u8]);
+        impl<'a, 'de> de::Visitor<'de> for Visitor<'a> {
+            type Value = ();
+            fn expecting(
+                &self,
+                f: &mut std::fmt::Formatter<'_>,
+            ) -> std::result::Result<(), std::fmt::Error> {
+                write!(f, "{} literal bytes", self.0.len())
             }
 
-            deserializer.deserialize_tuple(len, Visitor(self.0))
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                for (i, expected) in self.0.iter().copied().enumerate() {
+                    let received: u8 = seq
+                        .next_element()?
+                        .ok_or_else(|| de::Error::invalid_length(i, &self))?;
+                    if expected != received {
+                        return Err(de::Error::invalid_value(
+                            de::Unexpected::Unsigned(received as u64),
+                            &format!("{} in {:?}", expected, self.0).as_str(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
         }
-    }
 
-    Literal(literal)
+        deserializer.deserialize_tuple(len, Visitor(self.0))
+    }
 }
 
 pub struct LittleEndian;
