@@ -6,6 +6,7 @@ edition = "2018"
 publish = false
 
 [dependencies]
+arrayvec = "0.5.1"
 serde = "1.0.115"
 serde-seeded = { path = "../serde-seeded" }
 wyz = "0.2.0"

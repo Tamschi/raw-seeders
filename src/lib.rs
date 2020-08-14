@@ -1,10 +1,11 @@
-use std::marker::PhantomData;
 use {
+    arrayvec::{Array, ArrayVec},
     serde::{
         de::{self, DeserializeSeed as _},
-        ser,
+        ser::{self, SerializeTuple as _},
     },
     serde_seeded::Seeder,
+    std::{iter, marker::PhantomData},
     wyz::Pipe as _,
 };
 
@@ -183,5 +184,114 @@ impl IEEE754able for f64 {
     }
     fn to(&self) -> Self::Repr {
         self.to_bits()
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct Tuple<ItemSeeder>(pub ItemSeeder);
+impl<'s, T: 's + Tupleable, ItemSeeder: Clone + for<'item> Seeder<'item, T::Item> + 's>
+    Seeder<'s, T> for Tuple<ItemSeeder>
+{
+    type Seed = TupleSeed<T, ItemSeeder>;
+    type Seeded = TupleSeeded<'s, T, ItemSeeder>;
+    fn seed(self) -> Self::Seed {
+        TupleSeed(self.0, PhantomData)
+    }
+    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+        TupleSeeded(value, &self.0)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct TupleSeed<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
+impl<'de, T: Tupleable, ItemSeeder: Clone + for<'d> Seeder<'d, T::Item>> de::DeserializeSeed<'de>
+    for TupleSeed<T, ItemSeeder>
+{
+    type Value = T;
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct Visitor<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
+        impl<'de, T: Tupleable, ItemSeeder: Clone + for<'d> Seeder<'d, T::Item>> de::Visitor<'de>
+            for Visitor<T, ItemSeeder>
+        {
+            type Value = T;
+            fn expecting(
+                &self,
+                f: &mut std::fmt::Formatter<'_>,
+            ) -> std::result::Result<(), std::fmt::Error> {
+                write!(f, "Tuple with lenth {}", T::LEN)
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut error = Ok(());
+                let array = T::from(
+                    iter::from_fn(|| match seq.next_element_seed(self.0.clone().seed()) {
+                        Ok(next) => next,
+                        Err(e) => {
+                            error = Err(e);
+                            None
+                        }
+                    })
+                    .take(T::LEN),
+                )?;
+                Ok(array)
+            }
+        }
+
+        deserializer.deserialize_tuple(T::LEN, Visitor(self.0, PhantomData))
+    }
+}
+
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub struct TupleSeeded<'a, T, ItemSeeder>(&'a T, &'a ItemSeeder);
+impl<'a, T: Tupleable, ItemSeeder: for<'b> Seeder<'b, T::Item>> ser::Serialize
+    for TupleSeeded<'a, T, ItemSeeder>
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut serialize_tuple = serializer.serialize_tuple(T::LEN)?;
+        self.0.to(&mut serialize_tuple, self.1)?;
+        serialize_tuple.end()
+    }
+}
+
+pub trait Tupleable: Sized {
+    type Item;
+    const LEN: usize;
+    fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E>;
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: for<'s> Seeder<'s, Self::Item>>(
+        &self,
+        serialize_tuple: &mut SerializeTuple,
+        item_seeder: &ItemSeeder,
+    ) -> Result<(), SerializeTuple::Error>;
+}
+
+impl<T: Array> Tupleable for T {
+    type Item = T::Item;
+    const LEN: usize = T::CAPACITY;
+    fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E> {
+        let mut items = items.into_iter();
+        let mut vec = ArrayVec::new();
+        while !vec.is_full() {
+            vec.push(items.next().ok_or_else(|| {
+                de::Error::invalid_length(vec.len(), &format!("Tuple of {}", Self::LEN).as_ref())
+            })?)
+        }
+        let array = vec.into_inner().map_err(|_| unreachable!())?;
+        Ok(array)
+    }
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: for<'s> Seeder<'s, Self::Item>>(
+        &self,
+        serialize_tuple: &mut SerializeTuple,
+        item_seeder: &ItemSeeder,
+    ) -> Result<(), SerializeTuple::Error> {
+        for element in self.as_slice() {
+            serialize_tuple.serialize_element(&item_seeder.seeded(element))?
+        }
+        Ok(())
     }
 }
