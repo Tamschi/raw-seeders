@@ -1,11 +1,11 @@
-use serde_seeded::{DeSeeder, SerSeeder};
 use {
     arrayvec::{Array, ArrayVec},
     serde::{
         de::{self, DeserializeSeed as _},
         ser::{self, SerializeSeq as _, SerializeTuple as _},
     },
-    std::{iter, marker::PhantomData},
+    serde_seeded::{DeSeeder, SerSeeder},
+    std::{iter, marker::PhantomData, ops::Deref},
     wyz::Pipe as _,
 };
 
@@ -424,7 +424,7 @@ pub trait DeSeqable: Sized {
     fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E>;
 }
 /// See [`Seq`].
-pub trait SerSeqable<'s>: Sized {
+pub trait SerSeqable<'s> {
     type Item;
     fn len(&self) -> usize;
     fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<'s, Self::Item>>(
@@ -458,10 +458,10 @@ impl<T: Array> DeSeqable for T {
         Ok(array)
     }
 }
-impl<'s, Item> SerSeqable<'s> for Vec<Item> {
-    type Item = Item;
+impl<'s, T: Array> SerSeqable<'s> for T {
+    type Item = T::Item;
     fn len(&self) -> usize {
-        self.len()
+        T::CAPACITY
     }
     fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<'s, Self::Item>>(
         &'s self,
@@ -473,8 +473,20 @@ impl<'s, Item> SerSeqable<'s> for Vec<Item> {
         }
         Ok(())
     }
-
-    fn is_empty(&self) -> bool {
-        self.is_empty()
+}
+impl<'s, Item> SerSeqable<'s> for [Item] {
+    type Item = Item;
+    fn len(&self) -> usize {
+        self.deref().len()
+    }
+    fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<'s, Self::Item>>(
+        &'s self,
+        serialize_seq: &mut SerializeSeq,
+        item_seeder: &'s ItemSeeder,
+    ) -> Result<(), SerializeSeq::Error> {
+        for element in self {
+            serialize_seq.serialize_element(&item_seeder.seeded(element))?
+        }
+        Ok(())
     }
 }
