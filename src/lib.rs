@@ -20,9 +20,9 @@ impl<'a> DeSeeder<()> for Literal<'a> {
         self
     }
 }
-impl<'s> SerSeeder<'s, ()> for Literal<'s> {
+impl<'seeder: 'value, 'value> SerSeeder<'seeder, 'value, ()> for Literal<'seeder> {
     type Seeded = Self;
-    fn seeded(&'s self, _: &()) -> Self::Seeded {
+    fn seeded(&'seeder self, _: &()) -> Self::Seeded {
         *self
     }
 }
@@ -81,9 +81,11 @@ impl<T: ByteOrdered> DeSeeder<T> for LittleEndian {
         LittleEndianSeed(PhantomData)
     }
 }
-impl<'s, T: 's + ByteOrdered> SerSeeder<'s, T> for LittleEndian {
-    type Seeded = LittleEndianSeeded<'s, T>;
-    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+impl<'seeder: 'value, 'value, T: 'value + ByteOrdered> SerSeeder<'seeder, 'value, T>
+    for LittleEndian
+{
+    type Seeded = LittleEndianSeeded<'value, T>;
+    fn seeded(&'seeder self, value: &'value T) -> Self::Seeded {
         LittleEndianSeeded(value)
     }
 }
@@ -137,11 +139,15 @@ impl<T: IEEE754ableDe, ReprSeeder: DeSeeder<T::Repr>> DeSeeder<T> for IEEE754<Re
         IEEE754Seed(self.0, PhantomData)
     }
 }
-impl<'s, T: 's + IEEE754ableSer, ReprSeeder: for<'repr> SerSeeder<'repr, T::Repr> + 's>
-    SerSeeder<'s, T> for IEEE754<ReprSeeder>
+impl<
+        'seeder: 'value,
+        'value,
+        T: 'value + IEEE754ableSer,
+        ReprSeeder: for<'repr> SerSeeder<'value, 'repr, T::Repr> + 'seeder,
+    > SerSeeder<'seeder, 'value, T> for IEEE754<ReprSeeder>
 {
-    type Seeded = IEEE754Seeded<'s, T, ReprSeeder>;
-    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+    type Seeded = IEEE754Seeded<'value, T, ReprSeeder>;
+    fn seeded(&'seeder self, value: &'value T) -> Self::Seeded {
         IEEE754Seeded(value, &self.0)
     }
 }
@@ -164,8 +170,8 @@ impl<'de, T: IEEE754ableDe, ReprSeeder: DeSeeder<T::Repr>> de::DeserializeSeed<'
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub struct IEEE754Seeded<'a, T, ReprSeeder>(&'a T, &'a ReprSeeder);
-impl<'s, T: IEEE754ableSer, ReprSeeder: for<'repr> SerSeeder<'repr, T::Repr>> ser::Serialize
-    for IEEE754Seeded<'s, T, ReprSeeder>
+impl<'seeder, T: IEEE754ableSer, ReprSeeder: for<'repr> SerSeeder<'seeder, 'repr, T::Repr>>
+    ser::Serialize for IEEE754Seeded<'seeder, T, ReprSeeder>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -223,31 +229,23 @@ impl IEEE754ableSer for f64 {
 /// Containers as tuple. Serialization-only of variable-length ones.  
 /// (Usage: [`Tuple::of(item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
-pub struct Tuple<ItemSeeder, Item>(ItemSeeder, PhantomData<Item>);
-impl<ItemSeeder, Item> Tuple<ItemSeeder, Item> {
-    pub fn of(item_seeder: ItemSeeder) -> Self {
-        Self(item_seeder, PhantomData)
-    }
-}
-
-impl<T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T>
-    for Tuple<ItemSeeder, T::Item>
-{
+pub struct Tuple<ItemSeeder>(pub ItemSeeder);
+impl<T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T> for Tuple<ItemSeeder> {
     type Seed = TupleSeed<T, ItemSeeder>;
     fn seed(self) -> Self::Seed {
         TupleSeed(self.0, PhantomData)
     }
 }
 impl<
-        's,
-        T: 's + SerTupleable<'s, Item>,
-        ItemSeeder: Clone + SerSeeder<'s, Item> + 's,
-        Item: 's,
-    > SerSeeder<'s, T> for Tuple<ItemSeeder, Item>
+        'seeder: 'value,
+        'value,
+        T: 'value + SerTupleable<'seeder, 'value>,
+        ItemSeeder: Clone + for<'item> SerSeeder<'seeder, 'item, T::Item> + 'seeder,
+    > SerSeeder<'seeder, 'value, T> for Tuple<ItemSeeder>
 {
-    type Seeded = TupleSeeded<'s, T, ItemSeeder, Item>;
-    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
-        TupleSeeded(value, &self.0, self.1)
+    type Seeded = TupleSeeded<'seeder, 'value, T, ItemSeeder>;
+    fn seeded(&'seeder self, value: &'value T) -> Self::Seeded {
+        TupleSeeded(value, &self.0)
     }
 }
 
@@ -296,9 +294,13 @@ impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Deserialize
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct TupleSeeded<'s, T, ItemSeeder, Item>(&'s T, &'s ItemSeeder, PhantomData<Item>);
-impl<'s, T: SerTupleable<'s, Item>, ItemSeeder: SerSeeder<'s, Item>, Item> ser::Serialize
-    for TupleSeeded<'s, T, ItemSeeder, Item>
+pub struct TupleSeeded<'seeder, 'value, T, ItemSeeder>(&'value T, &'seeder ItemSeeder);
+impl<
+        'seeder,
+        'value,
+        T: SerTupleable<'seeder, 'value>,
+        ItemSeeder: SerSeeder<'seeder, 'value, T::Item>,
+    > ser::Serialize for TupleSeeded<'seeder, 'value, T, ItemSeeder>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -317,15 +319,16 @@ pub trait DeTupleable: Sized {
     fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E>;
 }
 /// See [`Tuple`].
-pub trait SerTupleable<'s, Item> {
-    fn len(&self) -> usize;
-    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'s, Item>>(
-        &'s self,
+pub trait SerTupleable<'seeder, 'value> {
+    type Item;
+    fn len(&'value self) -> usize;
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'seeder, 'value, Self::Item>>(
+        &'value self,
         serialize_tuple: &mut SerializeTuple,
-        item_seeder: &'s ItemSeeder,
+        item_seeder: &'seeder ItemSeeder,
     ) -> Result<(), SerializeTuple::Error>;
 
-    fn is_empty(&self) -> bool {
+    fn is_empty(&'value self) -> bool {
         self.len() == 0
     }
 }
@@ -350,17 +353,25 @@ impl<T: Array> DeTupleable for T {
         Ok(array)
     }
 }
-impl<'s, T: AsRef<[Item]>, Item: 's> SerTupleable<'s, Item> for T {
-    fn len(&self) -> usize {
-        self.as_ref().len()
+impl<'seeder, 'value, T: 'value> SerTupleable<'seeder, 'value> for T
+where
+    &'value T: IntoIterator,
+    <&'value T as IntoIterator>::IntoIter: ExactSizeIterator,
+{
+    type Item = <&'value T as IntoIterator>::Item;
+    fn len(&'value self) -> usize {
+        self.into_iter().len()
     }
-    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'s, Item>>(
-        &'s self,
+    fn to<
+        SerializeTuple: ser::SerializeTuple,
+        ItemSeeder: SerSeeder<'seeder, 'value, Self::Item>,
+    >(
+        &'value self,
         serialize_tuple: &mut SerializeTuple,
-        item_seeder: &'s ItemSeeder,
+        item_seeder: &'seeder ItemSeeder,
     ) -> Result<(), SerializeTuple::Error> {
-        for element in self.as_ref() {
-            serialize_tuple.serialize_element(&item_seeder.seeded(element))?
+        for element in self.into_iter() {
+            serialize_tuple.serialize_element(&item_seeder.seeded(&element))?
         }
         Ok(())
     }
@@ -384,11 +395,15 @@ impl<T: DeSeqable<Item>, ItemSeeder: Clone + DeSeeder<Item>, Item> DeSeeder<T>
         SeqSeed(self.0, PhantomData)
     }
 }
-impl<'s, T: 's + SerSeqable<'s>, ItemSeeder: Clone + for<'item> SerSeeder<'item, T::Item> + 's>
-    SerSeeder<'s, T> for Seq<ItemSeeder, T::Item>
+impl<
+        'seeder: 'value,
+        'value,
+        T: 'value + SerSeqable<'seeder, 'value>,
+        ItemSeeder: Clone + SerSeeder<'seeder, 'value, T::Item> + 'seeder,
+    > SerSeeder<'seeder, 'value, T> for Seq<ItemSeeder, T::Item>
 {
-    type Seeded = SeqSeeded<'s, T, ItemSeeder>;
-    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+    type Seeded = SeqSeeded<'seeder, 'value, T, ItemSeeder>;
+    fn seeded(&'seeder self, value: &'value T) -> Self::Seeded {
         SeqSeeded(value, &self.0)
     }
 }
@@ -437,9 +452,13 @@ impl<'de, T: DeSeqable<Item>, ItemSeeder: Clone + DeSeeder<Item>, Item> de::Dese
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct SeqSeeded<'s, T, ItemSeeder>(&'s T, &'s ItemSeeder);
-impl<'s, T: SerSeqable<'s>, ItemSeeder: for<'item> SerSeeder<'item, T::Item>> ser::Serialize
-    for SeqSeeded<'s, T, ItemSeeder>
+pub struct SeqSeeded<'seeder, 'value, T, ItemSeeder>(&'value T, &'seeder ItemSeeder);
+impl<
+        'seeder,
+        'value,
+        T: SerSeqable<'seeder, 'value>,
+        ItemSeeder: SerSeeder<'seeder, 'value, T::Item>,
+    > ser::Serialize for SeqSeeded<'seeder, 'value, T, ItemSeeder>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -456,16 +475,16 @@ pub trait DeSeqable<Item>: Sized {
     fn from<I: IntoIterator<Item = Item>, E: de::Error>(items: I) -> Result<Self, E>;
 }
 /// See [`Seq`].
-pub trait SerSeqable<'s> {
+pub trait SerSeqable<'seeder, 'value> {
     type Item;
-    fn len(&'s self) -> Option<usize>;
-    fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: for<'item> SerSeeder<'item, Self::Item>>(
-        &'s self,
+    fn len(&'value self) -> Option<usize>;
+    fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<'seeder, 'value, Self::Item>>(
+        &'value self,
         serialize_seq: &mut SerializeSeq,
-        item_seeder: &'s ItemSeeder,
+        item_seeder: &'seeder ItemSeeder,
     ) -> Result<(), SerializeSeq::Error>;
 
-    fn is_empty(&'s self) -> Option<bool> {
+    fn is_empty(&'value self) -> Option<bool> {
         self.len().map(|len| len == 0)
     }
 }
@@ -475,12 +494,13 @@ impl<T: FromIterator<Item>, Item> DeSeqable<Item> for T {
         Ok(items.into_iter().collect())
     }
 }
-impl<'s, T: 's> SerSeqable<'s> for T
+impl<'seeder, 'value, T: 'value> SerSeqable<'seeder, 'value> for T
 where
-    &'s T: IntoIterator,
+    &'value T: IntoIterator,
+    <&'value T as IntoIterator>::Item: 'value,
 {
-    type Item = <&'s T as IntoIterator>::Item;
-    fn len(&'s self) -> Option<usize> {
+    type Item = <&'value T as IntoIterator>::Item;
+    fn len(&'value self) -> Option<usize> {
         let hint = self.into_iter().size_hint();
         if let Some(max) = hint.1 {
             if hint.0 == max {
@@ -491,11 +511,11 @@ where
     }
     fn to<
         SerializeSeq: ser::SerializeSeq,
-        ItemSeeder: for<'item> SerSeeder<'item, <&'s T as IntoIterator>::Item>,
+        ItemSeeder: SerSeeder<'seeder, 'value, <&'value T as IntoIterator>::Item>,
     >(
-        &'s self,
+        &'value self,
         serialize_seq: &mut SerializeSeq,
-        item_seeder: &'s ItemSeeder,
+        item_seeder: &'seeder ItemSeeder,
     ) -> Result<(), SerializeSeq::Error> {
         for element in self.into_iter() {
             serialize_seq.serialize_element(&item_seeder.seeded(&element))?
