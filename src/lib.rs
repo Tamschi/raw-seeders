@@ -204,7 +204,7 @@ impl IEEE754able for f64 {
 }
 
 /// Fixed length containers as tuple.  
-/// (Parameters: item [`Seeder`])
+/// (Usage: [`Tuple::of(item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Tuple<ItemSeeder, Item>(ItemSeeder, PhantomData<Item>);
 impl<ItemSeeder, Item> Tuple<ItemSeeder, Item> {
@@ -349,8 +349,8 @@ impl<'s, T: AsRef<[Item]>, Item: 's> SerTupleable<'s, Item> for T {
     }
 }
 
-/// Variable length containers as seq. Serialization only.
-/// (Parameters: item [`Seeder`])
+/// Variable length containers as seq.
+/// (Usage: [`Seq(item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Seq<ItemSeeder>(pub ItemSeeder);
 impl<T: DeSeqable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T> for Seq<ItemSeeder> {
@@ -388,21 +388,20 @@ impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<T::Item>> de::DeserializeSe
                 &self,
                 f: &mut std::fmt::Formatter<'_>,
             ) -> std::result::Result<(), std::fmt::Error> {
-                write!(f, "Seq with lenth {}", T::len())
+                write!(f, "Seq")
             }
 
             fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
                 let mut error = Ok(());
-                let array = T::from(
-                    iter::from_fn(|| match seq.next_element_seed(self.0.clone().seed()) {
+                let array = T::from(iter::from_fn(|| {
+                    match seq.next_element_seed(self.0.clone().seed()) {
                         Ok(next) => next,
                         Err(e) => {
                             error = Err(e);
                             None
                         }
-                    })
-                    .take(T::len()),
-                )?;
+                    }
+                }))?;
                 Ok(array)
             }
         }
@@ -430,7 +429,6 @@ impl<'s, T: SerSeqable<'s>, ItemSeeder: SerSeeder<'s, T::Item>> ser::Serialize
 /// See [`Seq`].
 pub trait DeSeqable: Sized {
     type Item;
-    fn len() -> usize;
     fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E>;
 }
 /// See [`Seq`].
@@ -448,30 +446,16 @@ pub trait SerSeqable<'s> {
     }
 }
 
-impl<T: Array> DeSeqable for T {
-    type Item = T::Item;
-    fn len() -> usize {
-        T::CAPACITY
-    }
+impl<T> DeSeqable for Vec<T> {
+    type Item = T;
     fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E> {
-        let mut items = items.into_iter();
-        let mut vec = ArrayVec::new();
-        while !vec.is_full() {
-            vec.push(items.next().ok_or_else(|| {
-                de::Error::invalid_length(
-                    vec.len(),
-                    &format!("Seq of {}", <Self as DeSeqable>::len()).as_ref(),
-                )
-            })?)
-        }
-        let array = vec.into_inner().map_err(|_| unreachable!())?;
-        Ok(array)
+        Ok(items.into_iter().collect())
     }
 }
-impl<'s, T: Array> SerSeqable<'s> for T {
-    type Item = T::Item;
+impl<'s, T> SerSeqable<'s> for Vec<T> {
+    type Item = T;
     fn len(&self) -> usize {
-        T::CAPACITY
+        self.len()
     }
     fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<'s, Self::Item>>(
         &'s self,
