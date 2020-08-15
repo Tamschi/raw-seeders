@@ -206,19 +206,31 @@ impl IEEE754able for f64 {
 /// Fixed length containers as tuple.  
 /// (Parameters: item [`Seeder`])
 #[derive(Debug, Copy, Clone, Default)]
-pub struct Tuple<ItemSeeder>(pub ItemSeeder);
-impl<T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T> for Tuple<ItemSeeder> {
+pub struct Tuple<ItemSeeder, Item>(ItemSeeder, PhantomData<Item>);
+impl<ItemSeeder, Item> Tuple<ItemSeeder, Item> {
+    pub fn of(item_seeder: ItemSeeder) -> Self {
+        Self(item_seeder, PhantomData)
+    }
+}
+
+impl<T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T>
+    for Tuple<ItemSeeder, T::Item>
+{
     type Seed = TupleSeed<T, ItemSeeder>;
     fn seed(self) -> Self::Seed {
         TupleSeed(self.0, PhantomData)
     }
 }
-impl<'s, T: 's + SerTupleable<'s>, ItemSeeder: Clone + SerSeeder<'s, T::Item> + 's> SerSeeder<'s, T>
-    for Tuple<ItemSeeder>
+impl<
+        's,
+        T: 's + SerTupleable<'s, Item>,
+        ItemSeeder: Clone + SerSeeder<'s, Item> + 's,
+        Item: 's,
+    > SerSeeder<'s, T> for Tuple<ItemSeeder, Item>
 {
-    type Seeded = TupleSeeded<'s, T, ItemSeeder>;
+    type Seeded = TupleSeeded<'s, T, ItemSeeder, Item>;
     fn seeded(&'s self, value: &'s T) -> Self::Seeded {
-        TupleSeeded(value, &self.0)
+        TupleSeeded(value, &self.0, self.1)
     }
 }
 
@@ -267,9 +279,9 @@ impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Deserialize
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct TupleSeeded<'s, T, ItemSeeder>(&'s T, &'s ItemSeeder);
-impl<'s, T: SerTupleable<'s>, ItemSeeder: SerSeeder<'s, T::Item>> ser::Serialize
-    for TupleSeeded<'s, T, ItemSeeder>
+pub struct TupleSeeded<'s, T, ItemSeeder, Item>(&'s T, &'s ItemSeeder, PhantomData<Item>);
+impl<'s, T: SerTupleable<'s, Item>, ItemSeeder: SerSeeder<'s, Item>, Item> ser::Serialize
+    for TupleSeeded<'s, T, ItemSeeder, Item>
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -288,10 +300,9 @@ pub trait DeTupleable: Sized {
     fn from<I: IntoIterator<Item = Self::Item>, E: de::Error>(items: I) -> Result<Self, E>;
 }
 /// See [`Tuple`].
-pub trait SerTupleable<'s> {
-    type Item;
+pub trait SerTupleable<'s, Item> {
     fn len(&self) -> usize;
-    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'s, Self::Item>>(
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'s, Item>>(
         &'s self,
         serialize_tuple: &mut SerializeTuple,
         item_seeder: &'s ItemSeeder,
@@ -322,17 +333,16 @@ impl<T: Array> DeTupleable for T {
         Ok(array)
     }
 }
-impl<'s, T: Array> SerTupleable<'s> for T {
-    type Item = T::Item;
+impl<'s, T: AsRef<[Item]>, Item: 's> SerTupleable<'s, Item> for T {
     fn len(&self) -> usize {
-        T::CAPACITY
+        self.as_ref().len()
     }
-    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'s, Self::Item>>(
+    fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<'s, Item>>(
         &'s self,
         serialize_tuple: &mut SerializeTuple,
         item_seeder: &'s ItemSeeder,
     ) -> Result<(), SerializeTuple::Error> {
-        for element in self.as_slice() {
+        for element in self.as_ref() {
             serialize_tuple.serialize_element(&item_seeder.seeded(element))?
         }
         Ok(())
