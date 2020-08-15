@@ -13,7 +13,7 @@ use {
 /// (Parameters: A `&[u8]` specifying the data to store or check against.)
 #[derive(Debug, Clone, Copy, PartialEq, Ord, PartialOrd, Eq)]
 pub struct Literal<'a>(pub &'a [u8]);
-impl<'a> DeSeeder<()> for Literal<'a> {
+impl<'a, 'de> DeSeeder<'de, ()> for Literal<'a> {
     type Seed = Self;
     fn seed(self) -> Self::Seed {
         self
@@ -74,7 +74,7 @@ impl<'a, 'de> de::DeserializeSeed<'de> for Literal<'a> {
 /// Little-endian (least significant byte first) storage for integers.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct LittleEndian;
-impl<T: ByteOrdered> DeSeeder<T> for LittleEndian {
+impl<'de, T: ByteOrdered> DeSeeder<'de, T> for LittleEndian {
     type Seed = LittleEndianSeed<T>;
     fn seed(self) -> Self::Seed {
         LittleEndianSeed(PhantomData)
@@ -130,7 +130,9 @@ impl ByteOrdered for u32 {
 /// (Parameters: unsigned integer [`Seeder`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IEEE754<ReprSeeder>(pub ReprSeeder);
-impl<T: IEEE754able, ReprSeeder: DeSeeder<T::Repr>> DeSeeder<T> for IEEE754<ReprSeeder> {
+impl<'d, T: IEEE754able, ReprSeeder: DeSeeder<'d, T::Repr>> DeSeeder<'d, T>
+    for IEEE754<ReprSeeder>
+{
     type Seed = IEEE754Seed<T, ReprSeeder>;
     fn seed(self) -> Self::Seed {
         IEEE754Seed(self.0, PhantomData)
@@ -148,7 +150,7 @@ impl<'s, T: 's + IEEE754able, ReprSeeder: for<'repr> SerSeeder<'repr, T::Repr> +
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct IEEE754Seed<T, ReprSeeder>(ReprSeeder, PhantomData<T>);
-impl<'de, T: IEEE754able, ReprSeeder: DeSeeder<T::Repr>> de::DeserializeSeed<'de>
+impl<'de, T: IEEE754able, ReprSeeder: DeSeeder<'de, T::Repr>> de::DeserializeSeed<'de>
     for IEEE754Seed<T, ReprSeeder>
 {
     type Value = T;
@@ -213,7 +215,7 @@ impl<ItemSeeder, Item> Tuple<ItemSeeder, Item> {
     }
 }
 
-impl<T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T>
+impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> DeSeeder<'de, T>
     for Tuple<ItemSeeder, T::Item>
 {
     type Seed = TupleSeed<T, ItemSeeder>;
@@ -237,7 +239,7 @@ impl<
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct TupleSeed<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
-impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::DeserializeSeed<'de>
+impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::DeserializeSeed<'de>
     for TupleSeed<T, ItemSeeder>
 {
     type Value = T;
@@ -246,7 +248,7 @@ impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Deserialize
         D: serde::Deserializer<'de>,
     {
         struct Visitor<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
-        impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Visitor<'de>
+        impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Visitor<'de>
             for Visitor<T, ItemSeeder>
         {
             type Value = T;
@@ -353,7 +355,9 @@ impl<'s, T: AsRef<[Item]>, Item: 's> SerTupleable<'s, Item> for T {
 /// (Usage: [`TupleN(length, item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct TupleN<ItemSeeder>(pub usize, pub ItemSeeder);
-impl<T: DeTupleNable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T> for TupleN<ItemSeeder> {
+impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> DeSeeder<'de, T>
+    for TupleN<ItemSeeder>
+{
     type Seed = TupleNSeed<T, ItemSeeder>;
     fn seed(self) -> Self::Seed {
         TupleNSeed(self.0, self.1, PhantomData)
@@ -371,7 +375,7 @@ impl<'s, T: 's + SerTupleNable<'s>, ItemSeeder: 's + Clone + SerSeeder<'s, T::It
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct TupleNSeed<T, ItemSeeder>(usize, ItemSeeder, PhantomData<T>);
-impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<T::Item>> de::DeserializeSeed<'de>
+impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::DeserializeSeed<'de>
     for TupleNSeed<T, ItemSeeder>
 {
     type Value = T;
@@ -380,7 +384,7 @@ impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Deserializ
         D: serde::Deserializer<'de>,
     {
         struct Visitor<T, ItemSeeder>(usize, ItemSeeder, PhantomData<T>);
-        impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Visitor<'de>
+        impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Visitor<'de>
             for Visitor<T, ItemSeeder>
         {
             type Value = T;
@@ -508,7 +512,9 @@ impl<'s, Item> SerTupleNable<'s> for [Item] {
 /// (Usage: [`Seq(item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Seq<ItemSeeder>(pub ItemSeeder);
-impl<T: DeSeqable, ItemSeeder: Clone + DeSeeder<T::Item>> DeSeeder<T> for Seq<ItemSeeder> {
+impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> DeSeeder<'de, T>
+    for Seq<ItemSeeder>
+{
     type Seed = SeqSeed<T, ItemSeeder>;
     fn seed(self) -> Self::Seed {
         SeqSeed(self.0, PhantomData)
@@ -526,7 +532,7 @@ impl<'s, T: 's + SerSeqable<'s>, ItemSeeder: 's + Clone + SerSeeder<'s, T::Item>
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Default)]
 pub struct SeqSeed<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
-impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<T::Item>> de::DeserializeSeed<'de>
+impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::DeserializeSeed<'de>
     for SeqSeed<T, ItemSeeder>
 {
     type Value = T;
@@ -535,7 +541,7 @@ impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<T::Item>> de::DeserializeSe
         D: serde::Deserializer<'de>,
     {
         struct Visitor<T, ItemSeeder>(ItemSeeder, PhantomData<T>);
-        impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<T::Item>> de::Visitor<'de>
+        impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Visitor<'de>
             for Visitor<T, ItemSeeder>
         {
             type Value = T;
