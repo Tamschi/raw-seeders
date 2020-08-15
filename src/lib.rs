@@ -645,3 +645,17 @@ impl<'s, Item> SerSeqable<'s> for [Item] {
         Ok(())
     }
 }
+
+pub struct SerdeLike;
+impl<'s, T: 's + ser::Serialize> SerSeeder<'s, T> for SerdeLike {
+    type Seeded = &'s T;
+    fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+        value
+    }
+}
+impl<'de, T: de::Deserialize<'de>> DeSeeder<'de, T> for SerdeLike {
+    type Seed = PhantomData<T>;
+    fn seed(self) -> Self::Seed {
+        PhantomData
+    }
+}
