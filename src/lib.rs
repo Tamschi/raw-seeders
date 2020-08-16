@@ -682,8 +682,8 @@ impl<'de, Length, LengthSeeder, ItemSeeder: DeSeeder<'de, Item>, Item> de::Deser
 	}
 }
 
-impl<'s, Length, LengthSeeder, ItemSeeder: SerSeeder<'s, Item>, Item> SerSeeder<'s, Vec<Item>>
-	for LengthPrefixed<Length, LengthSeeder, ItemSeeder>
+impl<'s, Length: 's, LengthSeeder: 's, ItemSeeder: 's + SerSeeder<'s, Item>, Item: 's>
+	SerSeeder<'s, Vec<Item>> for LengthPrefixed<Length, LengthSeeder, ItemSeeder>
 {
 	type Seeded = LengthPrefixedSeeded<'s, Length, LengthSeeder, ItemSeeder, Item>;
 	fn seeded(&'s self, value: &'s Vec<Item>) -> Self::Seeded {
