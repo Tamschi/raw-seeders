@@ -677,18 +677,7 @@ impl<'de, Length, LengthSeeder, ItemSeeder: DeSeeder<'de, Item>, Item> de::Deser
     where
         D: serde::Deserializer<'de>,
     {
-        #[derive(Debug, seed)]
-        #[seed_generics('de, LengthSeeder: DeSeeder<'de, Length>, ItemSeeder: DeSeeder<'de, Item>)]
-        #[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
-        struct Layout<Length, Item> {
-            #[seeded(length_seeder)]
-            length: Length,
-
-            #[seeded(TupleN(self.length as usize, item_seeder))]
-            data: Vec<Item>,
-        }
-
-        Layout::seed(self.1, self.2)
+        LengthPrefixedLayout::seed(self.1, self.2)
             .deserialize(deserializer)?
             .data
             .pipe(Ok)
@@ -718,24 +707,27 @@ impl<'s, Length, LengthSeeder, ItemSeeder: SerSeeder<'s, Item>, Item> ser::Seria
     where
         S: serde::Serializer,
     {
-        #[derive(Debug, seeded)]
-        #[seed_generics(LengthSeeder: SerSeeder<'s, Length>, ItemSeeder: SerSeeder<'s, Item>)]
-        #[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
-        struct Layout<'s, Length, Item> {
-            #[seeded(length_seeder)]
-            length: Length,
-
-            #[seeded(TupleN(*self.length as usize, item_seeder))]
-            data: &'s Vec<Item>,
-        }
-
-        Layout {
+        LengthPrefixedLayout {
             length: self.3.len() as Length,
             data: self.3,
         }
         .seeded(self.1, self.2)
         .serialize(serializer)
     }
+}
+
+#[derive(Debug, seed, /*seeded*/)]
+#[seed_generics_de('de, LengthSeeder: DeSeeder<'de, Length>, ItemSeeder: DeSeeder<'de, Item>)]
+#[seed_generics_ser(LengthSeeder: SerSeeder<'s, Length>, ItemSeeder: SerSeeder<'s, Item>)]
+#[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
+struct LengthPrefixedLayout<Length, Item> {
+    #[seeded(length_seeder)]
+    length: Length,
+
+    #[seeded_de(TupleN(self.length as usize, item_seeder))]
+    #[seeded_ser(TupleN(self.length as usize, item_seeder))]
+    // #[seeded_ser(TupleN(self.length as usize, item_seeder))]
+    data: Vec<Item>,
 }
 
 pub struct SerdeLike;
