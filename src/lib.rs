@@ -1,4 +1,5 @@
 use arrayvec::{Array, ArrayVec};
+use cast::{u32, usize};
 use serde::{
 	de::{self, DeserializeSeed as _},
 	ser::{self, SerializeSeq as _, SerializeTuple as _},
@@ -644,37 +645,45 @@ impl<'s, Item> SerSeqable<'s> for [Item] {
 	}
 }
 
+/// [`Vec<_>`] as length-prefixed tuple.  
+/// (Usage: [`Tuple::of(length_seeder: --Seeder<usize>, item_seeder)`])
 #[derive(Debug, Copy, Clone)]
-pub struct LengthPrefixed<Length, LengthSeeder, ItemSeeder>(
-	pub PhantomData<Length>,
-	pub LengthSeeder,
-	pub ItemSeeder,
-);
+pub struct LengthPrefixed<LengthSeeder, ItemSeeder>(pub LengthSeeder, pub ItemSeeder);
 
-impl<'de, Length, LengthSeeder, ItemSeeder: DeSeeder<'de, Item>, Item> DeSeeder<'de, Vec<Item>>
-	for LengthPrefixed<Length, LengthSeeder, ItemSeeder>
+impl<'de, LengthSeeder: DeSeeder<'de, usize>, ItemSeeder: DeSeeder<'de, Item>, Item>
+	DeSeeder<'de, Vec<Item>> for LengthPrefixed<LengthSeeder, ItemSeeder>
 {
-	type Seed = LengthPrefixedSeed<Length, LengthSeeder, ItemSeeder, Item>;
+	type Seed = LengthPrefixedSeed<LengthSeeder, ItemSeeder, Item>;
 	fn seed(self) -> Self::Seed {
-		LengthPrefixedSeed(self.0, self.1, self.2, PhantomData)
+		LengthPrefixedSeed(self.1, self.2, PhantomData)
 	}
 }
 
-pub struct LengthPrefixedSeed<Length, LengthSeeder, ItemSeeder, Item>(
-	pub PhantomData<Length>,
+pub struct LengthPrefixedSeed<LengthSeeder, ItemSeeder, Item>(
 	pub LengthSeeder,
 	pub ItemSeeder,
 	pub PhantomData<Item>,
 );
 
-impl<'de, Length, LengthSeeder, ItemSeeder: DeSeeder<'de, Item>, Item> de::DeserializeSeed<'de>
-	for LengthPrefixedSeed<Length, LengthSeeder, ItemSeeder, Item>
+impl<'de, LengthSeeder, ItemSeeder: DeSeeder<'de, Item>, Item> de::DeserializeSeed<'de>
+	for LengthPrefixedSeed<LengthSeeder, ItemSeeder, Item>
 {
 	type Value = Vec<Item>;
 	fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
 	where
 		D: serde::Deserializer<'de>,
 	{
+		#[derive(Debug, seed)]
+		#[seed_generics_de('de, LengthSeeder: DeSeeder<'de, usize>, ItemSeeder: DeSeeder<'de, Item>)]
+		#[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
+		struct LengthPrefixedLayout<Item> {
+			#[seeded(length_seeder)]
+			length: usize,
+
+			#[seeded(TupleN(length, item_seeder))]
+			data: Vec<Item>,
+		}
+
 		LengthPrefixedLayout::seed(self.1, self.2)
 			.deserialize(deserializer)?
 			.data
@@ -682,50 +691,50 @@ impl<'de, Length, LengthSeeder, ItemSeeder: DeSeeder<'de, Item>, Item> de::Deser
 	}
 }
 
-impl<'s, Length: 's, LengthSeeder: 's, ItemSeeder: 's + SerSeeder<'s, Item>, Item: 's>
-	SerSeeder<'s, Vec<Item>> for LengthPrefixed<Length, LengthSeeder, ItemSeeder>
+impl<
+		's,
+		LengthSeeder: 's + SerSeeder<'s, usize>,
+		ItemSeeder: 's + SerSeeder<'s, Item>,
+		Item: 's,
+	> SerSeeder<'s, Vec<Item>> for LengthPrefixed<LengthSeeder, ItemSeeder>
 {
-	type Seeded = LengthPrefixedSeeded<'s, Length, LengthSeeder, ItemSeeder, Item>;
+	type Seeded = LengthPrefixedSeeded<'s, LengthSeeder, ItemSeeder, Item>;
 	fn seeded(&'s self, value: &'s Vec<Item>) -> Self::Seeded {
-		LengthPrefixedSeeded(self.0, self.1, self.2, value)
+		LengthPrefixedSeeded(self.1, self.2, value)
 	}
 }
 
-struct LengthPrefixedSeeded<'s, Length, LengthSeeder, ItemSeeder, Item>(
-	PhantomData<Length>,
+struct LengthPrefixedSeeded<'s, LengthSeeder, ItemSeeder, Item>(
 	LengthSeeder,
 	ItemSeeder,
 	&'s Vec<Item>,
 );
 
-impl<'s, Length, LengthSeeder, ItemSeeder: SerSeeder<'s, Item>, Item> ser::Serialize
-	for LengthPrefixedSeeded<'s, Length, LengthSeeder, ItemSeeder, Item>
+impl<'s, LengthSeeder, ItemSeeder: SerSeeder<'s, Item>, Item> ser::Serialize
+	for LengthPrefixedSeeded<'s, LengthSeeder, ItemSeeder, Item>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
 		S: serde::Serializer,
 	{
+		#[derive(Debug, seeded)]
+		#[seed_generics(LengthSeeder: SerSeeder<'s, usize>, ItemSeeder: SerSeeder<'s, Item>)]
+		#[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
+		struct LengthPrefixedLayout<'a, Item> {
+			#[seeded(length_seeder)]
+			length: usize,
+
+			#[seeded(TupleN(self.length, item_seeder))]
+			data: &'a Vec<Item>,
+		}
+
 		LengthPrefixedLayout {
-			length: self.3.len() as Length,
+			length: self.3.len(),
 			data: self.3,
 		}
 		.seeded(self.1, self.2)
 		.serialize(serializer)
 	}
-}
-
-#[derive(Debug, seed)]
-#[seed_generics_de('de, LengthSeeder: DeSeeder<'de, Length>, ItemSeeder: DeSeeder<'de, Item>)]
-#[seed_generics_ser(LengthSeeder: SerSeeder<'s, Length>, ItemSeeder: SerSeeder<'s, Item>)]
-#[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
-struct LengthPrefixedLayout<Length, Item> {
-	#[seeded(length_seeder)]
-	length: Length,
-
-	#[seeded_de(TupleN(self.length as usize, item_seeder))]
-	#[seeded_ser(TupleN(self.length as usize, item_seeder))]
-	// #[seeded_ser(TupleN(self.length as usize, item_seeder))]
-	data: Vec<Item>,
 }
 
 pub struct SerdeLike;
