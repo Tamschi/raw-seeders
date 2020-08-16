@@ -741,3 +741,68 @@ impl<'de, T: de::Deserialize<'de>> DeSeeder<'de, T> for SerdeLike {
 		PhantomData
 	}
 }
+
+/// Fallible u32-storage.  
+/// (Parameters: u32 [`Seeder`])
+#[derive(Debug, Copy, Clone, Default)]
+pub struct TryAsU32<U32Seeder>(pub U32Seeder);
+impl<'d, T: TryAsU32able, U32Seeder: DeSeeder<'d, u32>> DeSeeder<'d, T> for TryAsU32<U32Seeder> {
+	type Seed = TryAsU32Seed<T, U32Seeder>;
+	fn seed(self) -> Self::Seed {
+		TryAsU32Seed(self.0, PhantomData)
+	}
+}
+impl<'s, T: 's + TryAsU32able, U32Seeder: for<'repr> SerSeeder<'repr, u32> + 's> SerSeeder<'s, T>
+	for TryAsU32<U32Seeder>
+{
+	type Seeded = TryAsU32Seeded<'s, T, U32Seeder>;
+	fn seeded(&'s self, value: &'s T) -> Self::Seeded {
+		TryAsU32Seeded(value, &self.0)
+	}
+}
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct TryAsU32Seed<T, U32Seeder>(U32Seeder, PhantomData<T>);
+impl<'de, T: TryAsU32able, U32Seeder: DeSeeder<'de, u32>> de::DeserializeSeed<'de>
+	for TryAsU32Seed<T, U32Seeder>
+{
+	type Value = T;
+	fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		self.0.seed().deserialize(deserializer).map(T::from)
+	}
+}
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub struct TryAsU32Seeded<'a, T, U32Seeder>(&'a T, &'a U32Seeder);
+impl<'s, T: TryAsU32able, U32Seeder: for<'repr> SerSeeder<'repr, u32>> ser::Serialize
+	for TryAsU32Seeded<'s, T, U32Seeder>
+{
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: serde::Serializer,
+	{
+		self.0
+			.to()
+			.pipe(|repr| self.1.seeded(&repr).serialize(serializer))
+	}
+}
+
+/// See [`TryAsU32`].
+pub trait TryAsU32able {
+	fn from<E: de::Error>(repr: u32) -> Result<Self, E>;
+	fn to<E: ser::Error>(&self) -> Result<u32, E>;
+}
+
+impl TryAsU32able for usize {
+	fn from<E: de::Error>(repr: u32) -> Result<Self, E> {
+		usize(u32)
+	}
+	fn to<E: ser::Error>(&self) -> Result<u32, E> {
+		u32(*self)
+	}
+}
