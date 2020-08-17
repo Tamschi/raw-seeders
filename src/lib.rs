@@ -718,13 +718,13 @@ impl<'s, LengthSeeder, ItemSeeder: SerSeeder<'s, Item>, Item> ser::Serialize
 		S: serde::Serializer,
 	{
 		#[derive(Debug, seeded)]
-		#[seed_generics(LengthSeeder: SerSeeder<'s, usize>, ItemSeeder: SerSeeder<'s, Item>)]
+		#[seed_generics('ser, LengthSeeder: SerSeeder<'ser, usize>, ItemSeeder: SerSeeder<'ser, Item>)]
 		#[seed_args(length_seeder: LengthSeeder, item_seeder: ItemSeeder)]
 		struct LengthPrefixedLayout<'a, Item> {
 			#[seeded(length_seeder)]
 			length: usize,
 
-			#[seeded(TupleN(self.length, item_seeder))]
+			#[seeded(TupleN(length, item_seeder))]
 			data: &'a Vec<Item>,
 		}
 
