@@ -802,7 +802,7 @@ impl<'s, T: TryAsU32able, U32Seeder: for<'repr> SerSeeder<'repr, u32>> ser::Seri
 }
 
 /// See [`TryAsU32`].
-pub trait TryAsU32able {
+pub trait TryAsU32able: Sized {
 	fn from<E: de::Error>(repr: u32) -> Result<Self, E>;
 	fn to<E: ser::Error>(&self) -> Result<u32, E>;
 }
