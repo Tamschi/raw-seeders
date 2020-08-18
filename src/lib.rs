@@ -421,7 +421,7 @@ impl<'a, T: SerTupleNable, ItemSeeder: SerSeeder<T::Item>> ser::Serialize
 				self.0.len()
 			)));
 		}
-		let mut serialize_seq = serializer.serialize_tuple(self.0.len().into())?;
+		let mut serialize_seq = serializer.serialize_tuple(self.0.len())?;
 		self.0.to(&mut serialize_seq, self.2)?;
 		serialize_seq.end()
 	}
@@ -715,13 +715,13 @@ impl<'a, LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>, Item> ser:
 		S: serde::Serializer,
 	{
 		#[derive(Debug, seeded)]
-		#[seed_generics(LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>)]
+		#[seed_generics('ser, LengthSeeder: 'ser + SerSeeder<usize>, ItemSeeder: 'ser + SerSeeder<Item>)]
 		#[seed_args(length_seeder: &'ser LengthSeeder, item_seeder: &'ser ItemSeeder)]
 		struct LengthPrefixedLayout<'a, Item> {
 			#[seeded(length_seeder)]
 			length: usize,
 
-			#[seeded(TupleN(*length, **item_seeder))]
+			#[seeded(TupleN(*length, item_seeder))]
 			data: &'a Vec<Item>,
 		}
 
@@ -729,7 +729,7 @@ impl<'a, LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>, Item> ser:
 			length: self.2.len(),
 			data: self.2,
 		}
-		.seeded(&self.0, &self.1)
+		.seeded(self.0, self.1)
 		.serialize(serializer)
 	}
 }
