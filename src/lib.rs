@@ -1,12 +1,13 @@
 use arrayvec::{Array, ArrayVec};
-use cast::{u32, usize};
+use cast::{i32, u32, usize};
 use encoding::{all::WINDOWS_1252, DecoderTrap, Encoding as _};
+use log::{debug, trace};
 use serde::{
 	de::{self, DeserializeSeed as _},
 	ser::{self, SerializeSeq as _, SerializeTuple as _},
 };
 use serde_seeded::{seed, seeded, DeSeeder, Seeded, SerSeeder};
-use std::{iter, marker::PhantomData, ops::Deref};
+use std::{fmt::Debug, iter, marker::PhantomData, ops::Deref};
 use wyz::Pipe as _;
 
 /// Stores a binary slice instead of a `()`.  
@@ -113,6 +114,15 @@ impl<'a, T: ByteOrdered> ser::Serialize for LittleEndianSeeded<'a, T> {
 pub trait ByteOrdered: Sized {
 	fn deserialize_le<'de, D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error>;
 	fn serialize_le<S: ser::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error>;
+}
+
+impl ByteOrdered for i32 {
+	fn deserialize_le<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		Ok(Self::from_le_bytes(PhantomData.deserialize(deserializer)?))
+	}
+	fn serialize_le<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_bytes(&self.to_le_bytes())
+	}
 }
 
 impl ByteOrdered for u32 {
@@ -383,6 +393,11 @@ impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Deser
 			}
 
 			fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+				trace!(
+					"Deserializing TupleN({}, {})...",
+					self.0,
+					std::any::type_name::<A>()
+				);
 				let mut error = Ok(());
 				let vec = T::from(
 					iter::from_fn(|| match seq.next_element_seed(self.1.clone().seed()) {
@@ -394,9 +409,11 @@ impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Deser
 					})
 					.take(self.0),
 				)?;
+				error?;
 				if self.0 != vec.len() {
 					return Err(de::Error::invalid_length(vec.len(), &self));
 				}
+				trace!("Done TupleN({}, {}).", self.0, std::any::type_name::<A>());
 				Ok(vec)
 			}
 		}
@@ -811,6 +828,68 @@ impl TryAsU32able for usize {
 	}
 }
 
+/// Fallible i32-storage.  
+/// (Parameters: i32 [`Seeder`])
+#[derive(Debug, Copy, Clone, Default)]
+pub struct TryAsI32<I32Seeder>(pub I32Seeder);
+impl<'d, T: TryAsI32able, I32Seeder: DeSeeder<'d, i32>> DeSeeder<'d, T> for TryAsI32<I32Seeder> {
+	type Seed = TryAsI32Seed<T, I32Seeder>;
+	fn seed(self) -> Self::Seed {
+		TryAsI32Seed(self.0, PhantomData)
+	}
+}
+impl<T: TryAsI32able, I32Seeder: SerSeeder<i32>> SerSeeder<T> for TryAsI32<I32Seeder> {
+	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
+		Box::new(TryAsI32Seeded(value, &self.0))
+	}
+}
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct TryAsI32Seed<T, I32Seeder>(I32Seeder, PhantomData<T>);
+impl<'de, T: TryAsI32able, I32Seeder: DeSeeder<'de, i32>> de::DeserializeSeed<'de>
+	for TryAsI32Seed<T, I32Seeder>
+{
+	type Value = T;
+	fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		self.0.seed().deserialize(deserializer)?.pipe(T::from)
+	}
+}
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub struct TryAsI32Seeded<'a, T, I32Seeder>(&'a T, &'a I32Seeder);
+impl<'a, T: TryAsI32able, I32Seeder: SerSeeder<i32>> ser::Serialize
+	for TryAsI32Seeded<'a, T, I32Seeder>
+{
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: serde::Serializer,
+	{
+		self.0
+			.to()?
+			.pipe(|repr| self.1.seeded(&repr).serialize(serializer))
+	}
+}
+
+/// See [`TryAsI32`].
+pub trait TryAsI32able: Sized {
+	fn from<E: de::Error>(repr: i32) -> Result<Self, E>;
+	fn to<E: ser::Error>(&self) -> Result<i32, E>;
+}
+
+impl TryAsI32able for usize {
+	fn from<E: de::Error>(repr: i32) -> Result<Self, E> {
+		usize(repr).map_err(de::Error::custom)
+	}
+	fn to<E: ser::Error>(&self) -> Result<i32, E> {
+		i32(*self).map_err(ser::Error::custom)
+	}
+}
+
 /// String as Windows-1252 storage.  
 /// (Parameters: Vec<u8> [`Seeder`])
 #[derive(Debug, Copy, Clone, Default)]
@@ -842,7 +921,9 @@ impl<'de, T: DeWindows1252able<'de>, BytesSeeder: DeSeeder<'de, Vec<u8>>> de::De
 	where
 		D: serde::Deserializer<'de>,
 	{
-		self.0.seed().deserialize(deserializer)?.pipe(T::from)
+		let value = self.0.seed().deserialize(deserializer)?.pipe(T::from)?;
+		debug!("Decoded Windows-1252: {:?}", value);
+		Ok(value)
 	}
 }
 
@@ -863,7 +944,7 @@ impl<'a, T: SerWindows1252able, BytesSeeder: SerSeeder<Vec<u8>>> ser::Serialize
 }
 
 /// See [`Windows1252`].
-pub trait DeWindows1252able<'de>: Sized {
+pub trait DeWindows1252able<'de>: Sized + Debug {
 	fn from<E: de::Error>(repr: Vec<u8>) -> Result<Self, E>;
 }
 /// See [`Windows1252`].
