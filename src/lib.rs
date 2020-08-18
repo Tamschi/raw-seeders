@@ -1,5 +1,6 @@
 use arrayvec::{Array, ArrayVec};
 use cast::{u32, usize};
+use encoding::{all::WINDOWS_1252, DecoderTrap, Encoding as _};
 use serde::{
 	de::{self, DeserializeSeed as _},
 	ser::{self, SerializeSeq as _, SerializeTuple as _},
@@ -734,6 +735,7 @@ impl<'a, LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>, Item> ser:
 	}
 }
 
+#[derive(Debug, Copy, Clone)]
 pub struct SerdeLike;
 impl<T: ser::Serialize> SerSeeder<T> for SerdeLike {
 	fn seeded<'s>(&self, value: &'s T) -> Seeded<'s> {
@@ -806,5 +808,80 @@ impl TryAsU32able for usize {
 	}
 	fn to<E: ser::Error>(&self) -> Result<u32, E> {
 		u32(*self).map_err(ser::Error::custom)
+	}
+}
+
+/// String as Windows-1252 storage.  
+/// (Parameters: Vec<u8> [`Seeder`])
+#[derive(Debug, Copy, Clone, Default)]
+pub struct Windows1252<BytesSeeder>(pub BytesSeeder);
+impl<'de, T: DeWindows1252able<'de>, BytesSeeder: DeSeeder<'de, Vec<u8>>> DeSeeder<'de, T>
+	for Windows1252<BytesSeeder>
+{
+	type Seed = Windows1252Seed<T, BytesSeeder>;
+	fn seed(self) -> Self::Seed {
+		Windows1252Seed(self.0, PhantomData)
+	}
+}
+impl<T: SerWindows1252able, BytesSeeder: SerSeeder<Vec<u8>>> SerSeeder<T>
+	for Windows1252<BytesSeeder>
+{
+	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
+		Box::new(Windows1252Seeded(value, &self.0))
+	}
+}
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, Default)]
+pub struct Windows1252Seed<T, BytesSeeder>(BytesSeeder, PhantomData<T>);
+impl<'de, T: DeWindows1252able<'de>, BytesSeeder: DeSeeder<'de, Vec<u8>>> de::DeserializeSeed<'de>
+	for Windows1252Seed<T, BytesSeeder>
+{
+	type Value = T;
+	fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		self.0.seed().deserialize(deserializer)?.pipe(T::from)
+	}
+}
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
+pub struct Windows1252Seeded<'a, T, BytesSeeder>(&'a T, &'a BytesSeeder);
+impl<'a, T: SerWindows1252able, BytesSeeder: SerSeeder<Vec<u8>>> ser::Serialize
+	for Windows1252Seeded<'a, T, BytesSeeder>
+{
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: serde::Serializer,
+	{
+		self.0
+			.to()?
+			.pipe(|repr| self.1.seeded(&repr).serialize(serializer))
+	}
+}
+
+/// See [`Windows1252`].
+pub trait DeWindows1252able<'de>: Sized {
+	fn from<E: de::Error>(repr: Vec<u8>) -> Result<Self, E>;
+}
+/// See [`Windows1252`].
+pub trait SerWindows1252able: Sized {
+	fn to<E: ser::Error>(&self) -> Result<Vec<u8>, E>;
+}
+
+impl<'de> DeWindows1252able<'de> for String {
+	fn from<E: de::Error>(repr: Vec<u8>) -> Result<Self, E> {
+		WINDOWS_1252
+			.decode(repr.as_ref(), DecoderTrap::Strict)
+			.map_err(de::Error::custom)
+	}
+}
+impl SerWindows1252able for String {
+	fn to<E: ser::Error>(&self) -> Result<Vec<u8>, E> {
+		WINDOWS_1252
+			.encode(self, encoding::EncoderTrap::Strict)
+			.map_err(ser::Error::custom)
 	}
 }
