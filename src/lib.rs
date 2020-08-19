@@ -6,8 +6,8 @@ use serde::{
 	de::{self, DeserializeSeed as _},
 	ser::{self, SerializeSeq as _, SerializeTuple as _},
 };
-use serde_seeded::{seed, seeded, DeSeeder, Seeded, SerSeeder};
-use std::{fmt::Debug, iter, marker::PhantomData, ops::Deref};
+use serde_seeded::{seed, seeded, DeSeeder, SerSeeder};
+use std::{borrow::Borrow, fmt::Debug, iter, marker::PhantomData, ops::Deref};
 use wyz::Pipe as _;
 
 /// Stores a binary slice instead of a `()`.  
@@ -20,9 +20,9 @@ impl<'a, 'de> DeSeeder<'de, ()> for Literal<'a> {
 		self
 	}
 }
-impl<'a> SerSeeder<()> for Literal<'a> {
-	fn seeded<'s>(&'s self, _: &()) -> Seeded<'s> {
-		Box::new(*self)
+impl<'ser> SerSeeder<'ser, (), Self> for Literal<'ser> {
+	fn seeded(self, _: &()) -> Self {
+		self
 	}
 }
 impl<'a> ser::Serialize for Literal<'a> {
@@ -75,14 +75,14 @@ impl<'a, 'de> de::DeserializeSeed<'de> for Literal<'a> {
 #[derive(Debug, Copy, Clone, Default)]
 pub struct LittleEndian;
 impl<'de, T: ByteOrdered> DeSeeder<'de, T> for LittleEndian {
-	type Seed = LittleEndianSeed<T>;
+	type Seed = Self;
 	fn seed(self) -> Self::Seed {
-		LittleEndianSeed(PhantomData)
+		self
 	}
 }
-impl<T: ByteOrdered> SerSeeder<T> for LittleEndian {
-	fn seeded<'s>(&self, value: &'s T) -> Seeded<'s> {
-		Box::new(LittleEndianSeeded(value))
+impl<'ser, T: 'ser + ByteOrdered> SerSeeder<'ser, T, LittleEndianSeeded<'ser, T>> for LittleEndian {
+	fn seeded(self, value: &'ser T) -> LittleEndianSeeded<'ser, T> {
+		LittleEndianSeeded(value)
 	}
 }
 
@@ -100,7 +100,7 @@ impl<'de, T: ByteOrdered> de::DeserializeSeed<'de> for LittleEndianSeed<T> {
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct LittleEndianSeeded<'a, T>(&'a T);
+struct LittleEndianSeeded<'a, T>(&'a T);
 impl<'a, T: ByteOrdered> ser::Serialize for LittleEndianSeeded<'a, T> {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -146,8 +146,15 @@ impl<'d, T: IEEE754able, ReprSeeder: DeSeeder<'d, T::Repr>> DeSeeder<'d, T>
 		IEEE754Seed(self.0, PhantomData)
 	}
 }
-impl<T: IEEE754able, ReprSeeder: SerSeeder<T::Repr>> SerSeeder<T> for IEEE754<ReprSeeder> {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
+impl<
+		'ser,
+		T: 'ser + IEEE754able,
+		ReprSeeder: 'ser + SerSeeder<'ser, T::Repr, ReprSeeded>,
+		ReprSeeded,
+	> SerSeeder<'ser, T, IEEE754Seeded<'ser, T, ReprSeeder>> for IEEE754<ReprSeeder>
+{
+	type Seeded = IEEE754Seeded<'ser, T, ReprSeeder>;
+	fn seeded(self, value: &'ser T) -> IEEE754Seeded<'ser, T, ReprSeeder> {
 		Box::new(IEEE754Seeded(value, &self.0))
 	}
 }
@@ -169,9 +176,9 @@ impl<'de, T: IEEE754able, ReprSeeder: DeSeeder<'de, T::Repr>> de::DeserializeSee
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct IEEE754Seeded<'a, T, ReprSeeder>(&'a T, &'a ReprSeeder);
-impl<'a, T: IEEE754able, ReprSeeder: SerSeeder<T::Repr>> ser::Serialize
-	for IEEE754Seeded<'a, T, ReprSeeder>
+struct IEEE754Seeded<'a, T, ReprSeeder>(&'a T, &'a ReprSeeder);
+impl<'ser, T: IEEE754able, ReprSeeder: SerSeeder<'ser, T::Repr, ReprSeeded>, ReprSeeded>
+	ser::Serialize for IEEE754Seeded<'ser, T, ReprSeeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -213,26 +220,25 @@ impl IEEE754able for f64 {
 /// Fixed length containers as tuple.  
 /// (Usage: [`Tuple::of(item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
-pub struct Tuple<ItemSeeder, Item>(ItemSeeder, PhantomData<Item>);
-impl<ItemSeeder, Item> Tuple<ItemSeeder, Item> {
-	pub fn of(item_seeder: ItemSeeder) -> Self {
-		Self(item_seeder, PhantomData)
-	}
-}
-
+pub struct Tuple<ItemSeeder>(pub ItemSeeder);
 impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> DeSeeder<'de, T>
-	for Tuple<ItemSeeder, T::Item>
+	for Tuple<ItemSeeder>
 {
 	type Seed = TupleSeed<T, ItemSeeder>;
 	fn seed(self) -> Self::Seed {
 		TupleSeed(self.0, PhantomData)
 	}
 }
-impl<T: SerTupleable<Item>, ItemSeeder: Clone + SerSeeder<Item>, Item> SerSeeder<T>
-	for Tuple<ItemSeeder, Item>
+impl<
+		'ser,
+		T: SerTupleable<Item>,
+		ItemSeeder: Clone + SerSeeder<'ser, Item, ItemSeeded>,
+		Item,
+		ItemSeeded,
+	> SerSeeder<'ser, T, TupleSeeded<'ser, T, ItemSeeder>> for Tuple<ItemSeeder>
 {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
-		Box::new(TupleSeeded(value, &self.0, self.1))
+	fn seeded<'s>(&'s self, value: &'s T) -> TupleSeeded<'ser, T, ItemSeeder> {
+		TupleSeeded(value, &self.0)
 	}
 }
 
@@ -281,9 +287,14 @@ impl<'de, T: DeTupleable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Deseri
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct TupleSeeded<'a, T, ItemSeeder, Item>(&'a T, &'a ItemSeeder, PhantomData<Item>);
-impl<'a, T: SerTupleable<Item>, ItemSeeder: SerSeeder<Item>, Item> ser::Serialize
-	for TupleSeeded<'a, T, ItemSeeder, Item>
+struct TupleSeeded<'a, T, ItemSeeder>(&'a T, &'a ItemSeeder);
+impl<
+		'ser,
+		T: SerTupleable<Item>,
+		ItemSeeder: SerSeeder<'ser, Item, ItemSeeded>,
+		Item,
+		ItemSeeded,
+	> ser::Serialize for TupleSeeded<'ser, T, ItemSeeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -304,7 +315,12 @@ pub trait DeTupleable: Sized {
 /// See [`Tuple`].
 pub trait SerTupleable<Item> {
 	fn len(&self) -> usize;
-	fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<Item>>(
+	fn to<
+		'ser,
+		SerializeTuple: ser::SerializeTuple,
+		ItemSeeder: SerSeeder<'ser, Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_tuple: &mut SerializeTuple,
 		item_seeder: &ItemSeeder,
@@ -339,7 +355,12 @@ impl<T: AsRef<[Item]>, Item> SerTupleable<Item> for T {
 	fn len(&self) -> usize {
 		self.as_ref().len()
 	}
-	fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<Item>>(
+	fn to<
+		'ser,
+		SerializeTuple: ser::SerializeTuple,
+		ItemSeeder: SerSeeder<'ser, Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_tuple: &mut SerializeTuple,
 		item_seeder: &ItemSeeder,
@@ -354,18 +375,25 @@ impl<T: AsRef<[Item]>, Item> SerTupleable<Item> for T {
 /// Vec as tuple.
 /// (Usage: [`TupleN(length, item_seeder)`])
 #[derive(Debug, Copy, Clone, Default)]
-pub struct TupleN<ItemSeeder>(pub usize, pub ItemSeeder);
-impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> DeSeeder<'de, T>
-	for TupleN<ItemSeeder>
+pub struct TupleN<Length, ItemSeeder>(pub Length, pub ItemSeeder);
+impl<'de, T: DeTupleNable, Length: Borrow<usize>, ItemSeeder: Clone + DeSeeder<'de, T::Item>>
+	DeSeeder<'de, T> for TupleN<Length, ItemSeeder>
 {
 	type Seed = TupleNSeed<T, ItemSeeder>;
 	fn seed(self) -> Self::Seed {
-		TupleNSeed(self.0, self.1, PhantomData)
+		TupleNSeed(*self.0.borrow(), self.1, PhantomData)
 	}
 }
-impl<T: SerTupleNable, ItemSeeder: SerSeeder<T::Item>> SerSeeder<T> for TupleN<ItemSeeder> {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
-		Box::new(TupleNSeeded(value, self.0, &self.1))
+impl<
+		'ser,
+		T: SerTupleNable,
+		Length: Borrow<usize>,
+		ItemSeeder: SerSeeder<'ser, T::Item, ItemSeeded>,
+		ItemSeeded,
+	> SerSeeder<'ser, T, TupleNSeeded<'ser, T, ItemSeeder>> for TupleN<Length, ItemSeeder>
+{
+	fn seeded<'s>(&'s self, value: &'s T) -> TupleNSeeded<'ser, T, ItemSeeder> {
+		Box::new(TupleNSeeded(value, *self.0.borrow(), &self.1))
 	}
 }
 
@@ -424,9 +452,9 @@ impl<'de, T: DeTupleNable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Deser
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct TupleNSeeded<'a, T, ItemSeeder>(&'a T, usize, &'a ItemSeeder);
-impl<'a, T: SerTupleNable, ItemSeeder: SerSeeder<T::Item>> ser::Serialize
-	for TupleNSeeded<'a, T, ItemSeeder>
+struct TupleNSeeded<'a, T, ItemSeeder>(&'a T, usize, &'a ItemSeeder);
+impl<'ser, T: SerTupleNable, ItemSeeder: SerSeeder<'ser, T::Item, ItemSeeded>, ItemSeeded>
+	ser::Serialize for TupleNSeeded<'ser, T, ItemSeeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -459,7 +487,12 @@ pub trait DeTupleNable: Sized {
 pub trait SerTupleNable {
 	type Item;
 	fn len(&self) -> usize;
-	fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeTuple: ser::SerializeTuple,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_tuple: &mut SerializeTuple,
 		item_seeder: &ItemSeeder,
@@ -475,7 +508,12 @@ impl<'a, T: SerTupleNable> SerTupleNable for &'a T {
 	fn len(&self) -> usize {
 		T::len(self)
 	}
-	fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeTuple: ser::SerializeTuple,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_tuple: &mut SerializeTuple,
 		item_seeder: &ItemSeeder,
@@ -502,7 +540,12 @@ impl<T> SerTupleNable for Vec<T> {
 	fn len(&self) -> usize {
 		self.len()
 	}
-	fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeTuple: ser::SerializeTuple,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_tuple: &mut SerializeTuple,
 		item_seeder: &ItemSeeder,
@@ -518,7 +561,12 @@ impl<Item> SerTupleNable for [Item] {
 	fn len(&self) -> usize {
 		self.deref().len()
 	}
-	fn to<SerializeTuple: ser::SerializeTuple, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeTuple: ser::SerializeTuple,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_tuple: &mut SerializeTuple,
 		item_seeder: &ItemSeeder,
@@ -542,8 +590,10 @@ impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> DeSeeder<'de
 		SeqSeed(self.0, PhantomData)
 	}
 }
-impl<T: SerSeqable, ItemSeeder: Clone + SerSeeder<T::Item>> SerSeeder<T> for Seq<ItemSeeder> {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
+impl<'ser, T: SerSeqable, ItemSeeder: Clone + SerSeeder<'ser, T::Item, ItemSeeded>, ItemSeeded>
+	SerSeeder<'ser, T, SeqSeeded<'ser, T, ItemSeeder>> for Seq<ItemSeeder>
+{
+	fn seeded<'s>(&'s self, value: &'s T) -> SeqSeeded<'ser, T, ItemSeeder> {
 		Box::new(SeqSeeded(value, &self.0))
 	}
 }
@@ -592,9 +642,9 @@ impl<'de, T: DeSeqable, ItemSeeder: Clone + DeSeeder<'de, T::Item>> de::Deserial
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct SeqSeeded<'a, T, ItemSeeder>(&'a T, &'a ItemSeeder);
-impl<'a, T: SerSeqable, ItemSeeder: SerSeeder<T::Item>> ser::Serialize
-	for SeqSeeded<'a, T, ItemSeeder>
+struct SeqSeeded<'a, T, ItemSeeder>(&'a T, &'a ItemSeeder);
+impl<'ser, T: SerSeqable, ItemSeeder: SerSeeder<'ser, T::Item, ItemSeeded>, ItemSeeded>
+	ser::Serialize for SeqSeeded<'ser, T, ItemSeeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -615,7 +665,12 @@ pub trait DeSeqable: Sized {
 pub trait SerSeqable {
 	type Item;
 	fn len(&self) -> usize;
-	fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeSeq: ser::SerializeSeq,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_seq: &mut SerializeSeq,
 		item_seeder: &ItemSeeder,
@@ -637,7 +692,12 @@ impl<T> SerSeqable for Vec<T> {
 	fn len(&self) -> usize {
 		self.len()
 	}
-	fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeSeq: ser::SerializeSeq,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_seq: &mut SerializeSeq,
 		item_seeder: &ItemSeeder,
@@ -653,7 +713,12 @@ impl<Item> SerSeqable for [Item] {
 	fn len(&self) -> usize {
 		self.deref().len()
 	}
-	fn to<SerializeSeq: ser::SerializeSeq, ItemSeeder: SerSeeder<Self::Item>>(
+	fn to<
+		'ser,
+		SerializeSeq: ser::SerializeSeq,
+		ItemSeeder: SerSeeder<'ser, Self::Item, ItemSeeded>,
+		ItemSeeded,
+	>(
 		&self,
 		serialize_seq: &mut SerializeSeq,
 		item_seeder: &ItemSeeder,
@@ -711,10 +776,20 @@ impl<'de, LengthSeeder: DeSeeder<'de, usize>, ItemSeeder: DeSeeder<'de, Item> + 
 	}
 }
 
-impl<LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>, Item> SerSeeder<Vec<Item>>
+impl<
+		'ser,
+		LengthSeeder: SerSeeder<'ser, usize, LengthSeeded>,
+		LengthSeeded,
+		ItemSeeder: SerSeeder<'ser, Item, ItemSeeded>,
+		Item,
+		ItemSeeded,
+	> SerSeeder<'ser, Vec<Item>, LengthPrefixedSeeded<'ser, LengthSeeder, ItemSeeder, Item>>
 	for LengthPrefixed<LengthSeeder, ItemSeeder>
 {
-	fn seeded<'s>(&'s self, value: &'s Vec<Item>) -> Seeded<'s> {
+	fn seeded<'s>(
+		&'s self,
+		value: &'s Vec<Item>,
+	) -> LengthPrefixedSeeded<'ser, LengthSeeder, ItemSeeder, Item> {
 		Box::new(LengthPrefixedSeeded(&self.0, &self.1, value))
 	}
 }
@@ -725,15 +800,27 @@ struct LengthPrefixedSeeded<'a, LengthSeeder, ItemSeeder, Item>(
 	&'a Vec<Item>,
 );
 
-impl<'a, LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>, Item> ser::Serialize
-	for LengthPrefixedSeeded<'a, LengthSeeder, ItemSeeder, Item>
+impl<
+		'ser,
+		LengthSeeder: SerSeeder<'ser, usize, LengthSeeded>,
+		LengthSeeded,
+		ItemSeeder: SerSeeder<'ser, Item, ItemSeeded>,
+		Item,
+		ItemSeeded,
+	> ser::Serialize for LengthPrefixedSeeded<'ser, LengthSeeder, ItemSeeder, Item>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
 		S: serde::Serializer,
 	{
 		#[derive(Debug, seeded)]
-		#[seed_generics('ser, LengthSeeder: 'ser + SerSeeder<usize>, ItemSeeder: 'ser + SerSeeder<Item>)]
+		#[seed_generics(
+			'ser,
+			LengthSeeder: 'ser + SerSeeder<'ser, usize, LengthSeeded>,
+			LengthSeeded,
+			ItemSeeder: 'ser + SerSeeder<'ser, Item, ItemSeeded>,
+			ItemSeeded,
+		)]
 		#[seed_args(length_seeder: &'ser LengthSeeder, item_seeder: &'ser ItemSeeder)]
 		struct LengthPrefixedLayout<'a, Item> {
 			#[seeded(length_seeder)]
@@ -754,15 +841,15 @@ impl<'a, LengthSeeder: SerSeeder<usize>, ItemSeeder: SerSeeder<Item>, Item> ser:
 
 #[derive(Debug, Copy, Clone)]
 pub struct SerdeLike;
-impl<T: ser::Serialize> SerSeeder<T> for SerdeLike {
-	fn seeded<'s>(&self, value: &'s T) -> Seeded<'s> {
-		Box::new(value)
-	}
-}
 impl<'de, T: de::Deserialize<'de>> DeSeeder<'de, T> for SerdeLike {
 	type Seed = PhantomData<T>;
 	fn seed(self) -> Self::Seed {
 		PhantomData
+	}
+}
+impl<'ser, T: ser::Serialize> SerSeeder<'ser, T, &'ser T> for SerdeLike {
+	fn seeded(self, value: &'ser T) -> &'ser T {
+		value
 	}
 }
 
@@ -776,8 +863,10 @@ impl<'d, T: TryAsU32able, U32Seeder: DeSeeder<'d, u32>> DeSeeder<'d, T> for TryA
 		TryAsU32Seed(self.0, PhantomData)
 	}
 }
-impl<T: TryAsU32able, U32Seeder: SerSeeder<u32>> SerSeeder<T> for TryAsU32<U32Seeder> {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
+impl<'ser, T: TryAsU32able, U32Seeder: SerSeeder<'ser, u32, U32Seeded>, U32Seeded>
+	SerSeeder<'ser, T, TryAsI32Seeded<'ser, T, U32Seeder>> for TryAsU32<U32Seeder>
+{
+	fn seeded(&self, value: &'ser T) -> TryAsI32Seeded<'ser, T, U32Seeder> {
 		Box::new(TryAsU32Seeded(value, &self.0))
 	}
 }
@@ -799,9 +888,9 @@ impl<'de, T: TryAsU32able, U32Seeder: DeSeeder<'de, u32>> de::DeserializeSeed<'d
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct TryAsU32Seeded<'a, T, U32Seeder>(&'a T, &'a U32Seeder);
-impl<'a, T: TryAsU32able, U32Seeder: SerSeeder<u32>> ser::Serialize
-	for TryAsU32Seeded<'a, T, U32Seeder>
+struct TryAsU32Seeded<'a, T, U32Seeder>(&'a T, &'a U32Seeder);
+impl<'ser, T: TryAsU32able, U32Seeder: SerSeeder<'ser, u32, U32Seeded>, U32Seeded> ser::Serialize
+	for TryAsU32Seeded<'ser, T, U32Seeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -832,15 +921,17 @@ impl TryAsU32able for usize {
 /// (Parameters: i32 [`Seeder`])
 #[derive(Debug, Copy, Clone, Default)]
 pub struct TryAsI32<I32Seeder>(pub I32Seeder);
-impl<'d, T: TryAsI32able, I32Seeder: DeSeeder<'d, i32>> DeSeeder<'d, T> for TryAsI32<I32Seeder> {
+impl<'de, T: TryAsI32able, I32Seeder: DeSeeder<'de, i32>> DeSeeder<'de, T> for TryAsI32<I32Seeder> {
 	type Seed = TryAsI32Seed<T, I32Seeder>;
 	fn seed(self) -> Self::Seed {
 		TryAsI32Seed(self.0, PhantomData)
 	}
 }
-impl<T: TryAsI32able, I32Seeder: SerSeeder<i32>> SerSeeder<T> for TryAsI32<I32Seeder> {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
-		Box::new(TryAsI32Seeded(value, &self.0))
+impl<'ser, T: TryAsI32able, I32Seeder: SerSeeder<'ser, i32, I32Seeder>, I32Seeded>
+	SerSeeder<'ser, T, TryAsI32Seeded<'ser, T, I32Seeder>> for TryAsI32<I32Seeder>
+{
+	fn seeded<'s>(&'s self, value: &'s T) -> TryAsI32Seeded<'ser, T, I32Seeder> {
+		TryAsI32Seeded(value, &self.0)
 	}
 }
 
@@ -861,9 +952,9 @@ impl<'de, T: TryAsI32able, I32Seeder: DeSeeder<'de, i32>> de::DeserializeSeed<'d
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct TryAsI32Seeded<'a, T, I32Seeder>(&'a T, &'a I32Seeder);
-impl<'a, T: TryAsI32able, I32Seeder: SerSeeder<i32>> ser::Serialize
-	for TryAsI32Seeded<'a, T, I32Seeder>
+struct TryAsI32Seeded<'a, T, I32Seeder>(&'a T, &'a I32Seeder);
+impl<'ser, T: TryAsI32able, I32Seeder: SerSeeder<'ser, i32, I32Seeded>, I32Seeded> ser::Serialize
+	for TryAsI32Seeded<'ser, T, I32Seeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -902,10 +993,14 @@ impl<'de, T: DeWindows1252able<'de>, BytesSeeder: DeSeeder<'de, Vec<u8>>> DeSeed
 		Windows1252Seed(self.0, PhantomData)
 	}
 }
-impl<T: SerWindows1252able, BytesSeeder: SerSeeder<Vec<u8>>> SerSeeder<T>
-	for Windows1252<BytesSeeder>
+impl<
+		'ser,
+		T: SerWindows1252able,
+		BytesSeeder: SerSeeder<'ser, Vec<u8>, BytesSeeded>,
+		BytesSeeded,
+	> SerSeeder<'ser, T, Windows1252Seeded<'ser, T, BytesSeeder>> for Windows1252<BytesSeeder>
 {
-	fn seeded<'s>(&'s self, value: &'s T) -> Seeded<'s> {
+	fn seeded(self, value: &'ser T) -> Windows1252Seeded<'ser, T, BytesSeeder> {
 		Box::new(Windows1252Seeded(value, &self.0))
 	}
 }
@@ -929,9 +1024,13 @@ impl<'de, T: DeWindows1252able<'de>, BytesSeeder: DeSeeder<'de, Vec<u8>>> de::De
 
 #[doc(hidden)]
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq)]
-pub struct Windows1252Seeded<'a, T, BytesSeeder>(&'a T, &'a BytesSeeder);
-impl<'a, T: SerWindows1252able, BytesSeeder: SerSeeder<Vec<u8>>> ser::Serialize
-	for Windows1252Seeded<'a, T, BytesSeeder>
+struct Windows1252Seeded<'a, T, BytesSeeder>(&'a T, &'a BytesSeeder);
+impl<
+		'ser,
+		T: SerWindows1252able,
+		BytesSeeder: SerSeeder<'ser, Vec<u8>, BytesSeeded>,
+		BytesSeeded,
+	> ser::Serialize for Windows1252Seeded<'ser, T, BytesSeeder>
 {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
@@ -964,5 +1063,62 @@ impl SerWindows1252able for String {
 		WINDOWS_1252
 			.encode(self, encoding::EncoderTrap::Strict)
 			.map_err(ser::Error::custom)
+	}
+}
+
+/// Serializes [`AsRef<[u8]>`] as bytes.  
+/// Deserializes bytes as [`From<&'de [u8]> + From<Vec<u8>>`].
+pub struct Buffer;
+impl<'de, T: From<&'de [u8]> + From<Vec<u8>>> DeSeeder<'de, T> for Buffer {
+	type Seed = BufferSeed<T>;
+	fn seed(self) -> Self::Seed {
+		BufferSeed(PhantomData)
+	}
+}
+impl<'ser, T: AsRef<[u8]>> SerSeeder<'ser, T, BufferSeeded<'ser>> for Buffer {
+	fn seeded<'s>(&self, value: &'s T) -> BufferSeeded<'ser> {
+		Box::new(BufferSeeded(value.as_ref()))
+	}
+}
+
+/// See [`Buffer`].
+pub struct BufferSeed<T>(PhantomData<T>);
+impl<'de, T: From<&'de [u8]> + From<Vec<u8>>> de::DeserializeSeed<'de> for BufferSeed<T> {
+	type Value = T;
+
+	fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+	where
+		D: serde::Deserializer<'de>,
+	{
+		struct Visitor<T>(PhantomData<T>);
+		impl<'de, T: From<&'de [u8]> + From<Vec<u8>>> de::Visitor<'de> for Visitor<T> {
+			type Value = T;
+
+			fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+				write!(formatter, "bytes")
+			}
+
+			fn visit_borrowed_bytes<E: de::Error>(self, v: &'de [u8]) -> Result<Self::Value, E> {
+				Ok(v.into())
+			}
+			fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+				Ok(v.into())
+			}
+			fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+				self.visit_byte_buf(v.into())
+			}
+		}
+
+		deserializer.deserialize_bytes(Visitor(self.0))
+	}
+}
+
+struct BufferSeeded<'a>(&'a [u8]);
+impl<'a> ser::Serialize for BufferSeeded<'a> {
+	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+	where
+		S: serde::Serializer,
+	{
+		serializer.serialize_bytes(self.0)
 	}
 }
